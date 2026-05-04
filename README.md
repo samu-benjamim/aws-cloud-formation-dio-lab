@@ -292,11 +292,6 @@ aws cloudformation delete-stack \
 ├── 📁 templates/                       ← Templates CloudFormation
 │   ├── ec2-basico.yaml                 ← Template do lab
 │   └── ec2-com-security-group.yaml     ← Template com SG configurado
-└── 📁 images/                          ← Capturas de tela
-    ├── 01-upload-template.png
-    ├── 02-stack-criando.png
-    ├── 03-stack-completa.png
-    └── 04-recursos-criados.png
 ```
 
 ---

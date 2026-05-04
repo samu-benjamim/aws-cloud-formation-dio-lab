@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Template completo para criacao de instancia EC2 com Security Group configurado
+  - Lab DIO AWS CloudFormation.
+  Provisiona EC2 + SG com regras de acesso SSH e HTTP/HTTPS.
+
+# ─────────────────────────────────────────────
+# PARAMETROS
+# ─────────────────────────────────────────────
+Parameters:
+
+  NomeAmbiente:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Ambiente de implantacao
+
+  TipoInstancia:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+    Description: Tipo da instancia EC2
+
+  ImagemAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: AMI dinamica via SSM - sempre usa a versao mais recente do Amazon Linux 2
+
+  SeuIPParaSSH:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: >
+      Seu IP publico para acesso SSH (formato: x.x.x.x/32).
+      Use 0.0.0.0/0 apenas para estudos — nunca em producao!
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$"
+    ConstraintDescription: Deve ser um CIDR valido, ex: 177.100.200.50/32
+
+# ─────────────────────────────────────────────
+# MAPPINGS — valores estaticos por ambiente
+# ─────────────────────────────────────────────
+Mappings:
+
+  ConfigPorAmbiente:
+    dev:
+      TipoVolume: gp2
+      TamanhoVolume: 8
+    staging:
+      TipoVolume: gp3
+      TamanhoVolume: 20
+    prod:
+      TipoVolume: gp3
+      TamanhoVolume: 50
+
+# ─────────────────────────────────────────────
+# CONDITIONS — logica condicional
+# ─────────────────────────────────────────────
+Conditions:
+  EhProducao: !Equals [!Ref NomeAmbiente, prod]
+
+# ─────────────────────────────────────────────
+# RECURSOS
+# ─────────────────────────────────────────────
+Resources:
+
+  # ── Security Group ──────────────────────────
+  SecurityGroupWeb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "SG para instancia web - ambiente ${NomeAmbiente}"
+      SecurityGroupIngress:
+
+        # SSH — restrito ao IP informado no parametro
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SeuIPParaSSH
+          Description: Acesso SSH restrito
+
+        # HTTP — aberto para o mundo
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Acesso HTTP publico
+
+        # HTTPS — aberto para o mundo
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Acesso HTTPS publico
+
+      SecurityGroupEgress:
+        # Permite todo trafego de saida
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Todo trafego de saida permitido
+
+      Tags:
+        - Key: Name
+          Value: !Sub "sg-web-${NomeAmbiente}"
+        - Key: Environment
+          Value: !Ref NomeAmbiente
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ── Instancia EC2 ────────────────────────────
+  InstanciaEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref TipoInstancia
+      ImageId: !Ref ImagemAMI
+      SecurityGroups:
+        - !Ref SecurityGroupWeb
+
+      # Volume EBS configurado por ambiente via Mappings
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: !FindInMap [ConfigPorAmbiente, !Ref NomeAmbiente, TipoVolume]
+            VolumeSize: !FindInMap [ConfigPorAmbiente, !Ref NomeAmbiente, TamanhoVolume]
+            DeleteOnTermination: true
+            Encrypted: !If [EhProducao, true, false]
+
+      # Script executado automaticamente na primeira inicializacao
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+
+          # Atualiza pacotes e instala servidor web
+          yum update -y
+          yum install -y httpd
+
+          # Inicia e habilita o Apache
+          systemctl start httpd
+          systemctl enable httpd
+
+          # Pagina de boas-vindas com informacoes do ambiente
+          cat <<EOF > /var/www/html/index.html
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Lab CloudFormation - DIO</title>
+            <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }
+              .card { background: white; padding: 30px; border-radius: 8px; display: inline-block; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+              h1 { color: #ff9900; }
+              p { color: #555; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h1>☁️ AWS CloudFormation</h1>
+              <h2>Instancia provisionada com sucesso!</h2>
+              <p><strong>Ambiente:</strong> ${NomeAmbiente}</p>
+              <p><strong>Tipo:</strong> ${TipoInstancia}</p>
+              <p><strong>Regiao:</strong> ${AWS::Region}</p>
+              <p><strong>Stack:</strong> ${AWS::StackName}</p>
+            </div>
+          </body>
+          </html>
+          EOF
+
+      Tags:
+        - Key: Name
+          Value: !Sub "ec2-web-${NomeAmbiente}"
+        - Key: Environment
+          Value: !Ref NomeAmbiente
+        - Key: Project
+          Value: lab-dio-cloudformation
+        - Key: ManagedBy
+          Value: CloudFormation
+
+# ─────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────
+Outputs:
+
+  IDInstancia:
+    Description: ID da instancia EC2 criada
+    Value: !Ref InstanciaEC2
+
+  IPPublico:
+    Description: IP publico para acesso
+    Value: !GetAtt InstanciaEC2.PublicIp
+
+  URLServidor:
+    Description: URL de acesso ao servidor web
+    Value: !Sub "http://${InstanciaEC2.PublicDnsName}"
+
+  IDSecurityGroup:
+    Description: ID do Security Group criado
+    Value: !Ref SecurityGroupWeb
+
+  Ambiente:
+    Description: Ambiente deployado
+    Value: !Ref NomeAmbiente
